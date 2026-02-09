@@ -40,4 +40,33 @@ class ConfigContractTest < Minitest::Test
     assert_includes updated, "al_folio:\n  tailwind:\n    version: 4.1.18"
     refute_match(/^tailwind:\s*$/, updated)
   end
+
+  def test_check_config_contract_accepts_date_scalars
+    Dir.mktmpdir do |dir|
+      File.write(
+        File.join(dir, "_config.yml"),
+        <<~YAML
+          launch_date: 2026-01-01
+          al_folio:
+            api_version: 1
+            style_engine: tailwind
+            tailwind:
+              version: 4.1.18
+              preflight: false
+              css_entry: assets/tailwind/app.css
+            distill:
+              engine: distillpub-template
+              source: alshedivat/distillpub-template#al-folio
+              allow_remote_loader: false
+        YAML
+      )
+
+      cli = AlFolioUpgrade::CLI.new(root: dir)
+      findings = []
+      cli.send(:check_config_contract, findings)
+      ids = findings.map(&:id)
+
+      refute_includes ids, "invalid_config_yaml"
+    end
+  end
 end
