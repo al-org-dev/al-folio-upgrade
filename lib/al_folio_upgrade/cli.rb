@@ -3,6 +3,7 @@
 require "optparse"
 require "pathname"
 require "yaml"
+require "date"
 
 begin
   require "al_folio_core"
@@ -164,7 +165,7 @@ module AlFolioUpgrade
 
       content = config_path.read
       parsed = begin
-        YAML.safe_load(content, aliases: true) || {}
+        parse_yaml(content) || {}
       rescue StandardError => e
         findings << Finding.new(
           id: "invalid_config_yaml",
@@ -283,7 +284,7 @@ module AlFolioUpgrade
       allow_remote_loader = false
       if config_path.file?
         begin
-          parsed = YAML.safe_load(config_path.read, aliases: true) || {}
+          parsed = parse_yaml(config_path.read) || {}
           allow_remote_loader = parsed.dig("al_folio", "distill", "allow_remote_loader") == true
         rescue StandardError
           allow_remote_loader = false
@@ -422,7 +423,7 @@ module AlFolioUpgrade
     end
 
     def nested_namespace_present?(content, key)
-      parsed = YAML.safe_load(content, aliases: true) || {}
+      parsed = parse_yaml(content) || {}
       return false unless parsed.is_a?(Hash)
 
       al_folio = parsed["al_folio"]
@@ -436,11 +437,15 @@ module AlFolioUpgrade
       return false unless config_path.file?
 
       begin
-        parsed = YAML.safe_load(config_path.read, aliases: true) || {}
+        parsed = parse_yaml(config_path.read) || {}
         parsed["theme"] == "al_folio_core" || Array(parsed["plugins"]).include?("al_folio_core")
       rescue StandardError
         false
       end
+    end
+
+    def parse_yaml(content)
+      YAML.safe_load(content, permitted_classes: [Date, Time], aliases: true)
     end
 
     def manifest_paths
