@@ -2,6 +2,13 @@
 
 require "optparse"
 require "pathname"
+require "yaml"
+
+begin
+  require "al_folio_core"
+rescue LoadError
+  # Optional at runtime; fallback lookup paths are used if unavailable.
+end
 
 module AlFolioUpgrade
   class CLI
@@ -33,6 +40,25 @@ module AlFolioUpgrade
       { from: /\bfont-weight-bold\b/, to: "font-bold" },
       { from: /\bfont-weight-medium\b/, to: "font-medium" },
       { from: /\bfont-weight-lighter\b/, to: "font-light" },
+      { from: %r{https://distill\.pub/template\.v2\.js}, to: "/assets/js/distillpub/template.v2.js" },
+      { from: %r{assets/tailwind/input\.css}, to: "assets/tailwind/app.css" },
+    ].freeze
+
+    CORE_OVERRIDE_FILES = %w[
+      _includes/head.liquid
+      _includes/scripts.liquid
+      _includes/distill_scripts.liquid
+      _layouts/default.liquid
+      _layouts/post.liquid
+      _layouts/page.liquid
+      _layouts/distill.liquid
+      assets/js/common.js
+      assets/js/theme.js
+      assets/js/tooltips-setup.js
+      assets/js/distillpub/overrides.js
+      assets/js/distillpub/transforms.v2.js
+      assets/tailwind/app.css
+      tailwind.config.js
     ].freeze
 
     def initialize(root: Dir.pwd, stdout: $stdout, stderr: $stderr)
@@ -109,10 +135,27 @@ module AlFolioUpgrade
 
     def audit
       findings = []
+      check_manifest_contract(findings)
       check_config_contract(findings)
       check_legacy_assets(findings)
       check_legacy_patterns(findings)
+      check_distill_runtime(findings)
+      check_core_override_drift(findings)
       findings
+    end
+
+    def check_manifest_contract(findings)
+      manifests = manifest_paths
+      if manifests.empty?
+        findings << Finding.new(
+          id: "missing_migration_manifests",
+          severity: :warning,
+          message: "No migration manifests found. Install/update `al_folio_core` to get release contracts.",
+          file: "migrations/",
+          line: 1,
+          snippet: "Expected at least one `x.y.z_to_a.b.c.yml` manifest."
+        )
+      end
     end
 
     def check_config_contract(findings)
@@ -120,7 +163,22 @@ module AlFolioUpgrade
       return unless config_path.file?
 
       content = config_path.read
-      unless content.match?(/^al_folio:\s*$/)
+      parsed = begin
+        YAML.safe_load(content, aliases: true) || {}
+      rescue StandardError => e
+        findings << Finding.new(
+          id: "invalid_config_yaml",
+          severity: :blocking,
+          message: "_config.yml could not be parsed: #{e.message}",
+          file: "_config.yml",
+          line: 1,
+          snippet: "Fix YAML syntax before running upgrade codemods."
+        )
+        return
+      end
+
+      al_folio = parsed.is_a?(Hash) ? parsed["al_folio"] : nil
+      unless al_folio.is_a?(Hash)
         findings << Finding.new(
           id: "missing_al_folio_namespace",
           severity: :blocking,
@@ -129,9 +187,10 @@ module AlFolioUpgrade
           line: 1,
           snippet: "Add al_folio.api_version, style_engine, compat, and upgrade keys."
         )
+        return
       end
 
-      unless content.match?(/^\s*style_engine:\s*tailwind\s*$/)
+      unless al_folio["style_engine"] == "tailwind"
         findings << Finding.new(
           id: "style_engine_not_tailwind",
           severity: :blocking,
@@ -139,6 +198,28 @@ module AlFolioUpgrade
           file: "_config.yml",
           line: 1,
           snippet: "Set al_folio.style_engine: tailwind"
+        )
+      end
+
+      unless al_folio["tailwind"].is_a?(Hash)
+        findings << Finding.new(
+          id: "missing_tailwind_namespace",
+          severity: :warning,
+          message: "Missing `al_folio.tailwind` namespace for v1 tailwind runtime contract.",
+          file: "_config.yml",
+          line: 1,
+          snippet: "Add al_folio.tailwind.version/preflight/css_entry."
+        )
+      end
+
+      unless al_folio["distill"].is_a?(Hash)
+        findings << Finding.new(
+          id: "missing_distill_namespace",
+          severity: :warning,
+          message: "Missing `al_folio.distill` namespace for Distill runtime contract.",
+          file: "_config.yml",
+          line: 1,
+          snippet: "Add al_folio.distill.engine/source/allow_remote_loader."
         )
       end
     end
@@ -197,6 +278,54 @@ module AlFolioUpgrade
       end
     end
 
+    def check_distill_runtime(findings)
+      config_path = @root.join("_config.yml")
+      allow_remote_loader = false
+      if config_path.file?
+        begin
+          parsed = YAML.safe_load(config_path.read, aliases: true) || {}
+          allow_remote_loader = parsed.dig("al_folio", "distill", "allow_remote_loader") == true
+        rescue StandardError
+          allow_remote_loader = false
+        end
+      end
+
+      transforms_path = @root.join("assets/js/distillpub/transforms.v2.js")
+      return unless transforms_path.file?
+      return if allow_remote_loader
+
+      transforms_path.each_line.with_index(1) do |line, number|
+        next unless line.match?(%r{https://distill\.pub/template\.v2\.js})
+
+        findings << Finding.new(
+          id: "distill_remote_loader_enabled",
+          severity: :blocking,
+          message: "Distill runtime still references remote template loader while allow_remote_loader is false.",
+          file: "assets/js/distillpub/transforms.v2.js",
+          line: number,
+          snippet: line.strip
+        )
+      end
+    end
+
+    def check_core_override_drift(findings)
+      return unless using_core_theme?
+
+      CORE_OVERRIDE_FILES.each do |relative|
+        path = @root.join(relative)
+        next unless path.file?
+
+        findings << Finding.new(
+          id: "core_override_drift",
+          severity: :warning,
+          message: "Local override shadows `al_folio_core` theme file and may need manual review during upgrades.",
+          file: relative,
+          line: 1,
+          snippet: "Local override present."
+        )
+      end
+    end
+
     def each_candidate_file
       FILE_GLOBS.each do |glob|
         Dir.glob(@root.join(glob)).sort.each do |path|
@@ -236,13 +365,25 @@ module AlFolioUpgrade
     end
 
     def ensure_al_folio_namespace(content)
-      return content if content.match?(/^al_folio:\s*$/)
+      if content.match?(/^al_folio:\s*$/)
+        content = ensure_tailwind_namespace(content)
+        content = ensure_distill_namespace(content)
+        return content
+      end
 
       block = <<~YAML
 
         al_folio:
           api_version: 1
           style_engine: tailwind
+          tailwind:
+            version: 4.1.18
+            preflight: false
+            css_entry: assets/tailwind/app.css
+          distill:
+            engine: distillpub-template
+            source: alshedivat/distillpub-template#al-folio
+            allow_remote_loader: false
           compat:
             bootstrap:
               enabled: false
@@ -254,6 +395,60 @@ module AlFolioUpgrade
             auto_apply_safe_fixes: false
       YAML
       content + block
+    end
+
+    def ensure_tailwind_namespace(content)
+      return content if nested_namespace_present?(content, "tailwind")
+
+      insertion = [
+        "  tailwind:",
+        "    version: 4.1.18",
+        "    preflight: false",
+        "    css_entry: assets/tailwind/app.css",
+      ].join("\n")
+      content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion}" }
+    end
+
+    def ensure_distill_namespace(content)
+      return content if nested_namespace_present?(content, "distill")
+
+      insertion = [
+        "  distill:",
+        "    engine: distillpub-template",
+        "    source: alshedivat/distillpub-template#al-folio",
+        "    allow_remote_loader: false",
+      ].join("\n")
+      content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion}" }
+    end
+
+    def nested_namespace_present?(content, key)
+      parsed = YAML.safe_load(content, aliases: true) || {}
+      return false unless parsed.is_a?(Hash)
+
+      al_folio = parsed["al_folio"]
+      al_folio.is_a?(Hash) && al_folio[key].is_a?(Hash)
+    rescue StandardError
+      false
+    end
+
+    def using_core_theme?
+      config_path = @root.join("_config.yml")
+      return false unless config_path.file?
+
+      begin
+        parsed = YAML.safe_load(config_path.read, aliases: true) || {}
+        parsed["theme"] == "al_folio_core" || Array(parsed["plugins"]).include?("al_folio_core")
+      rescue StandardError
+        false
+      end
+    end
+
+    def manifest_paths
+      if defined?(AlFolioCore) && AlFolioCore.respond_to?(:migration_manifest_paths)
+        return Array(AlFolioCore.migration_manifest_paths).select { |path| File.file?(path) }
+      end
+
+      Dir.glob(@root.join("migrations/*.yml")).sort
     end
 
     def each_text_file
