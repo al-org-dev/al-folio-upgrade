@@ -163,7 +163,22 @@ module AlFolioUpgrade
       return unless config_path.file?
 
       content = config_path.read
-      unless content.match?(/^al_folio:\s*$/)
+      parsed = begin
+        YAML.safe_load(content, aliases: true) || {}
+      rescue StandardError => e
+        findings << Finding.new(
+          id: "invalid_config_yaml",
+          severity: :blocking,
+          message: "_config.yml could not be parsed: #{e.message}",
+          file: "_config.yml",
+          line: 1,
+          snippet: "Fix YAML syntax before running upgrade codemods."
+        )
+        return
+      end
+
+      al_folio = parsed.is_a?(Hash) ? parsed["al_folio"] : nil
+      unless al_folio.is_a?(Hash)
         findings << Finding.new(
           id: "missing_al_folio_namespace",
           severity: :blocking,
@@ -172,9 +187,10 @@ module AlFolioUpgrade
           line: 1,
           snippet: "Add al_folio.api_version, style_engine, compat, and upgrade keys."
         )
+        return
       end
 
-      unless content.match?(/^\s*style_engine:\s*tailwind\s*$/)
+      unless al_folio["style_engine"] == "tailwind"
         findings << Finding.new(
           id: "style_engine_not_tailwind",
           severity: :blocking,
@@ -185,7 +201,7 @@ module AlFolioUpgrade
         )
       end
 
-      unless content.match?(/^\s*tailwind:\s*$/)
+      unless al_folio["tailwind"].is_a?(Hash)
         findings << Finding.new(
           id: "missing_tailwind_namespace",
           severity: :warning,
@@ -196,7 +212,7 @@ module AlFolioUpgrade
         )
       end
 
-      unless content.match?(/^\s*distill:\s*$/)
+      unless al_folio["distill"].is_a?(Hash)
         findings << Finding.new(
           id: "missing_distill_namespace",
           severity: :warning,
@@ -382,27 +398,37 @@ module AlFolioUpgrade
     end
 
     def ensure_tailwind_namespace(content)
-      return content if content.match?(/^\s*tailwind:\s*$/)
+      return content if nested_namespace_present?(content, "tailwind")
 
-      insertion = <<~YAML
-          tailwind:
-            version: 4.1.18
-            preflight: false
-            css_entry: assets/tailwind/app.css
-      YAML
-      content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion.rstrip}" }
+      insertion = [
+        "  tailwind:",
+        "    version: 4.1.18",
+        "    preflight: false",
+        "    css_entry: assets/tailwind/app.css",
+      ].join("\n")
+      content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion}" }
     end
 
     def ensure_distill_namespace(content)
-      return content if content.match?(/^\s*distill:\s*$/)
+      return content if nested_namespace_present?(content, "distill")
 
-      insertion = <<~YAML
-          distill:
-            engine: distillpub-template
-            source: alshedivat/distillpub-template#al-folio
-            allow_remote_loader: false
-      YAML
-      content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion.rstrip}" }
+      insertion = [
+        "  distill:",
+        "    engine: distillpub-template",
+        "    source: alshedivat/distillpub-template#al-folio",
+        "    allow_remote_loader: false",
+      ].join("\n")
+      content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion}" }
+    end
+
+    def nested_namespace_present?(content, key)
+      parsed = YAML.safe_load(content, aliases: true) || {}
+      return false unless parsed.is_a?(Hash)
+
+      al_folio = parsed["al_folio"]
+      al_folio.is_a?(Hash) && al_folio[key].is_a?(Hash)
+    rescue StandardError
+      false
     end
 
     def using_core_theme?
