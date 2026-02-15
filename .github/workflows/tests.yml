@@ -25,7 +25,7 @@ jobs:
           gem build "$GEMSPEC"
           GEM_NAME=$(ruby -e "spec = Gem::Specification.load('$GEMSPEC'); puts spec.name")
           GEM_VERSION=$(ruby -e "spec = Gem::Specification.load('$GEMSPEC'); puts spec.version")
-          gem install --no-document "./${GEM_NAME}-${GEM_VERSION}.gem"
+          gem install --no-document --ignore-dependencies "./${GEM_NAME}-${GEM_VERSION}.gem"
 
       - name: Run tests
         run: ruby -Ilib:test -e 'Dir["test/**/*_test.rb"].sort.each { |f| require File.expand_path(f) }'
