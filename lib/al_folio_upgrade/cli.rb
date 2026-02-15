@@ -48,7 +48,6 @@ module AlFolioUpgrade
     CORE_OVERRIDE_FILES = %w[
       _includes/head.liquid
       _includes/scripts.liquid
-      _includes/distill_scripts.liquid
       _layouts/default.liquid
       _layouts/post.liquid
       _layouts/page.liquid
@@ -56,8 +55,6 @@ module AlFolioUpgrade
       assets/js/common.js
       assets/js/theme.js
       assets/js/tooltips-setup.js
-      assets/js/distillpub/overrides.js
-      assets/js/distillpub/transforms.v2.js
       assets/tailwind/app.css
       tailwind.config.js
     ].freeze
@@ -226,7 +223,7 @@ module AlFolioUpgrade
     end
 
     def check_legacy_assets(findings)
-      files = ["_includes/head.liquid", "_includes/scripts.liquid", "_includes/distill_scripts.liquid"]
+      files = ["_includes/head.liquid", "_includes/scripts.liquid"]
       patterns = [
         /bootstrap\.min\.css/,
         /mdbootstrap|mdb\.min\.(?:css|js)/,
@@ -291,22 +288,37 @@ module AlFolioUpgrade
         end
       end
 
-      transforms_path = @root.join("assets/js/distillpub/transforms.v2.js")
-      return unless transforms_path.file?
       return if allow_remote_loader
 
-      transforms_path.each_line.with_index(1) do |line, number|
-        next unless line.match?(%r{https://distill\.pub/template\.v2\.js})
+      distill_runtime_paths.each do |transforms_path|
+        report_file = if transforms_path.to_s.start_with?("#{@root}#{File::SEPARATOR}")
+                        transforms_path.relative_path_from(@root).to_s
+                      else
+                        "al_folio_distill:#{transforms_path}"
+                      end
 
-        findings << Finding.new(
-          id: "distill_remote_loader_enabled",
-          severity: :blocking,
-          message: "Distill runtime still references remote template loader while allow_remote_loader is false.",
-          file: "assets/js/distillpub/transforms.v2.js",
-          line: number,
-          snippet: line.strip
-        )
+        transforms_path.each_line.with_index(1) do |line, number|
+          next unless line.match?(%r{https://distill\.pub/template\.v2\.js})
+
+          findings << Finding.new(
+            id: "distill_remote_loader_enabled",
+            severity: :blocking,
+            message: "Distill runtime still references remote template loader while allow_remote_loader is false.",
+            file: report_file,
+            line: number,
+            snippet: line.strip
+          )
+        end
       end
+    end
+
+    def distill_runtime_paths
+      paths = [@root.join("assets/js/distillpub/transforms.v2.js")]
+      spec = Gem.loaded_specs["al_folio_distill"]
+      if spec
+        paths << Pathname.new(File.join(spec.full_gem_path, "assets/js/distillpub/transforms.v2.js"))
+      end
+      paths.select(&:file?).uniq
     end
 
     def check_core_override_drift(findings)
