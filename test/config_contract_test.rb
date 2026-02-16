@@ -66,7 +66,7 @@ class ConfigContractTest < Minitest::Test
               css_entry: assets/tailwind/app.css
             distill:
               engine: distillpub-template
-              source: alshedivat/distillpub-template#al-folio
+              source: al-org-dev/distill-template#al-folio
               allow_remote_loader: false
         YAML
       )

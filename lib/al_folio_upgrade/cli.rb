@@ -402,7 +402,7 @@ module AlFolioUpgrade
             css_entry: assets/tailwind/app.css
           distill:
             engine: distillpub-template
-            source: alshedivat/distillpub-template#al-folio
+            source: al-org-dev/distill-template#al-folio
             allow_remote_loader: true
           compat:
             bootstrap:
@@ -435,7 +435,7 @@ module AlFolioUpgrade
       insertion = [
         "  distill:",
         "    engine: distillpub-template",
-        "    source: alshedivat/distillpub-template#al-folio",
+        "    source: al-org-dev/distill-template#al-folio",
         "    allow_remote_loader: true",
       ].join("\n")
       content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion}" }
