@@ -314,8 +314,15 @@ module AlFolioUpgrade
 
     def distill_runtime_paths
       paths = [@root.join("assets/js/distillpub/transforms.v2.js")]
-      spec = Gem.loaded_specs["al_folio_distill"]
-      if spec
+      specs = []
+      specs << Gem.loaded_specs["al_folio_distill"] if Gem.loaded_specs.key?("al_folio_distill")
+      begin
+        specs << Gem::Specification.find_by_name("al_folio_distill")
+      rescue Gem::LoadError
+        # Optional gem; ignore when not installed.
+      end
+
+      specs.compact.uniq(&:full_gem_path).each do |spec|
         paths << Pathname.new(File.join(spec.full_gem_path, "assets/js/distillpub/transforms.v2.js"))
       end
       paths.select(&:file?).uniq
@@ -396,7 +403,7 @@ module AlFolioUpgrade
           distill:
             engine: distillpub-template
             source: alshedivat/distillpub-template#al-folio
-            allow_remote_loader: false
+            allow_remote_loader: true
           compat:
             bootstrap:
               enabled: false
@@ -429,7 +436,7 @@ module AlFolioUpgrade
         "  distill:",
         "    engine: distillpub-template",
         "    source: alshedivat/distillpub-template#al-folio",
-        "    allow_remote_loader: false",
+        "    allow_remote_loader: true",
       ].join("\n")
       content.sub(/^al_folio:\s*$/) { |match| "#{match}\n#{insertion}" }
     end
