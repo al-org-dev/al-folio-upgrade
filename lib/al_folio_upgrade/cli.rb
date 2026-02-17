@@ -59,6 +59,13 @@ module AlFolioUpgrade
       tailwind.config.js
     ].freeze
 
+    PLUGIN_OWNED_LOCAL_PATHS = {
+      "assets/js/search/**/*" => "al_search",
+      "assets/webfonts/**/*" => "al_icons",
+      "assets/fonts/academicons.*" => "al_icons",
+      "assets/fonts/scholar-icons.*" => "al_icons"
+    }.freeze
+
     def initialize(root: Dir.pwd, stdout: $stdout, stderr: $stderr)
       @root = Pathname.new(root)
       @stdout = stdout
@@ -139,6 +146,7 @@ module AlFolioUpgrade
       check_legacy_patterns(findings)
       check_distill_runtime(findings)
       check_core_override_drift(findings)
+      check_plugin_owned_local_assets(findings)
       findings
     end
 
@@ -220,6 +228,18 @@ module AlFolioUpgrade
           snippet: "Add al_folio.distill.engine/source/allow_remote_loader."
         )
       end
+
+      plugins = Array(parsed["plugins"]).map(&:to_s)
+      return if plugins.include?("al_icons")
+
+      findings << Finding.new(
+        id: "missing_al_icons_plugin",
+        severity: :warning,
+        message: "Missing `al_icons` in plugin list; icon runtime ownership moved out of core.",
+        file: "_config.yml",
+        line: 1,
+        snippet: "Add `- al_icons` under plugins."
+      )
     end
 
     def check_legacy_assets(findings)
@@ -343,6 +363,24 @@ module AlFolioUpgrade
           line: 1,
           snippet: "Local override present."
         )
+      end
+    end
+
+    def check_plugin_owned_local_assets(findings)
+      PLUGIN_OWNED_LOCAL_PATHS.each do |glob, owner_plugin|
+        Dir.glob(@root.join(glob)).sort.each do |path|
+          next unless File.file?(path)
+
+          relative = Pathname.new(path).relative_path_from(@root).to_s
+          findings << Finding.new(
+            id: "plugin_owned_local_asset",
+            severity: :warning,
+            message: "Local asset path is plugin-owned by `#{owner_plugin}` and may drift from release contracts.",
+            file: relative,
+            line: 1,
+            snippet: "Prefer plugin-managed runtime assets for this path."
+          )
+        end
       end
     end
 

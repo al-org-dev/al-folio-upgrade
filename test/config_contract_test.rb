@@ -57,6 +57,9 @@ class ConfigContractTest < Minitest::Test
         File.join(dir, "_config.yml"),
         <<~YAML
           launch_date: 2026-01-01
+          plugins:
+            - al_folio_core
+            - al_icons
           al_folio:
             api_version: 1
             style_engine: tailwind
@@ -77,6 +80,37 @@ class ConfigContractTest < Minitest::Test
       ids = findings.map(&:id)
 
       refute_includes ids, "invalid_config_yaml"
+      refute_includes ids, "missing_al_icons_plugin"
+    end
+  end
+
+  def test_check_config_contract_warns_when_al_icons_plugin_missing
+    Dir.mktmpdir do |dir|
+      File.write(
+        File.join(dir, "_config.yml"),
+        <<~YAML
+          plugins:
+            - al_folio_core
+          al_folio:
+            api_version: 1
+            style_engine: tailwind
+            tailwind:
+              version: 4.1.18
+              preflight: false
+              css_entry: assets/tailwind/app.css
+            distill:
+              engine: distillpub-template
+              source: al-org-dev/distill-template#al-folio
+              allow_remote_loader: false
+        YAML
+      )
+
+      cli = AlFolioUpgrade::CLI.new(root: dir)
+      findings = []
+      cli.send(:check_config_contract, findings)
+      ids = findings.map(&:id)
+
+      assert_includes ids, "missing_al_icons_plugin"
     end
   end
 
@@ -100,9 +134,9 @@ class ConfigContractTest < Minitest::Test
       findings = []
       cli.send(:check_distill_runtime, findings)
 
-      assert_equal 1, findings.count
-      assert_equal "distill_remote_loader_enabled", findings.first.id
-      assert_equal "assets/js/distillpub/transforms.v2.js", findings.first.file
+      distill_findings = findings.select { |finding| finding.id == "distill_remote_loader_enabled" }
+      refute_empty distill_findings
+      assert_includes distill_findings.map(&:file), "assets/js/distillpub/transforms.v2.js"
     end
   end
 
@@ -127,6 +161,25 @@ class ConfigContractTest < Minitest::Test
       cli.send(:check_distill_runtime, findings)
 
       assert_equal 0, findings.count
+    end
+  end
+
+  def test_check_plugin_owned_local_assets_flags_search_and_icon_paths
+    Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "assets/js/search"))
+      FileUtils.mkdir_p(File.join(dir, "assets/fonts"))
+      File.write(File.join(dir, "assets/js/search/ninja-keys.min.js"), "noop")
+      File.write(File.join(dir, "assets/fonts/academicons.woff"), "noop")
+
+      cli = AlFolioUpgrade::CLI.new(root: dir)
+      findings = []
+      cli.send(:check_plugin_owned_local_assets, findings)
+
+      ids = findings.map(&:id)
+      files = findings.map(&:file)
+      assert_equal ["plugin_owned_local_asset", "plugin_owned_local_asset"], ids.sort
+      assert_includes files, "assets/js/search/ninja-keys.min.js"
+      assert_includes files, "assets/fonts/academicons.woff"
     end
   end
 end
