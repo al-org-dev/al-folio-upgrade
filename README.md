@@ -1,6 +1,6 @@
-# Al-Folio Upgrade
+# al-folio-upgrade
 
-Upgrade CLI for al-folio v1.x.
+`al_folio_upgrade` is the upgrade CLI for `al-folio` v1.x.
 
 ## Commands
 
@@ -15,5 +15,14 @@ Upgrade CLI for al-folio v1.x.
 - Legacy Bootstrap/jQuery markers
 - Distill remote-loader policy
 - Local override drift when `theme: al_folio_core` is enabled
-- Plugin-owned local asset drift (for example search/icon runtime files copied into starter paths)
+- Plugin-owned local asset drift (for example copied search/icon runtime files)
 - Migration manifest availability from `al_folio_core`
+
+## Ecosystem context
+
+- Starter execution/docs live in `al-folio`.
+- Upgrade policy/audit behavior is owned by this plugin.
+
+## Contributing
+
+Audit/apply/report logic updates should be proposed in this repository.
