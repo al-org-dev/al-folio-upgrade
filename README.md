@@ -15,7 +15,7 @@
 - Legacy Bootstrap/jQuery markers
 - Distill remote-loader policy
 - Local override drift when `theme: al_folio_core` is enabled
-- Plugin-owned local asset drift (for example copied search/icon runtime files)
+- Plugin-owned local asset drift (for example copied search, icon, Distill, citation, and external-post runtime files)
 - Migration manifest availability from `al_folio_core`
 
 ## Ecosystem context

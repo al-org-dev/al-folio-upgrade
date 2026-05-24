@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2 - 2026-05-24
+
+- Expanded upgrade audit coverage for legacy local plugins and runtime assets that are now owned by v1 feature gems.
+
 ## 1.0.1 - 2026-02-17
 
 - Added ownership-aware checks for plugin-owned local runtime assets (icons/search paths).

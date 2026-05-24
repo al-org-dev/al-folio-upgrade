@@ -60,6 +60,14 @@ module AlFolioUpgrade
     ].freeze
 
     PLUGIN_OWNED_LOCAL_PATHS = {
+      "_plugins/external-posts.rb" => "al_ext_posts",
+      "_plugins/google-scholar-citations.rb" => "al_citations",
+      "_plugins/inspirehep-citations.rb" => "al_citations",
+      "_plugins/hide-custom-bibtex.rb" => "al_folio_core",
+      "_plugins/details.rb" => "al_folio_core",
+      "_plugins/file-exists.rb" => "al_folio_core",
+      "_plugins/remove-accents.rb" => "al_folio_core",
+      "assets/js/distillpub/**/*" => "al_folio_distill",
       "assets/js/search/**/*" => "al_search",
       "assets/webfonts/**/*" => "al_icons",
       "assets/fonts/academicons.*" => "al_icons",

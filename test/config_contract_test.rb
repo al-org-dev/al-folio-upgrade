@@ -164,11 +164,17 @@ class ConfigContractTest < Minitest::Test
     end
   end
 
-  def test_check_plugin_owned_local_assets_flags_search_and_icon_paths
+  def test_check_plugin_owned_local_assets_flags_runtime_assets_and_legacy_plugins
     Dir.mktmpdir do |dir|
+      FileUtils.mkdir_p(File.join(dir, "_plugins"))
+      File.write(File.join(dir, "_plugins/external-posts.rb"), "noop")
+      File.write(File.join(dir, "_plugins/google-scholar-citations.rb"), "noop")
+      File.write(File.join(dir, "_plugins/hide-custom-bibtex.rb"), "noop")
+      FileUtils.mkdir_p(File.join(dir, "assets/js/distillpub"))
+      File.write(File.join(dir, "assets/js/distillpub/transforms.v2.js"), "noop")
       FileUtils.mkdir_p(File.join(dir, "assets/js/search"))
-      FileUtils.mkdir_p(File.join(dir, "assets/fonts"))
       File.write(File.join(dir, "assets/js/search/ninja-keys.min.js"), "noop")
+      FileUtils.mkdir_p(File.join(dir, "assets/fonts"))
       File.write(File.join(dir, "assets/fonts/academicons.woff"), "noop")
 
       cli = AlFolioUpgrade::CLI.new(root: dir)
@@ -177,7 +183,11 @@ class ConfigContractTest < Minitest::Test
 
       ids = findings.map(&:id)
       files = findings.map(&:file)
-      assert_equal ["plugin_owned_local_asset", "plugin_owned_local_asset"], ids.sort
+      assert_equal Array.new(6, "plugin_owned_local_asset"), ids.sort
+      assert_includes files, "_plugins/external-posts.rb"
+      assert_includes files, "_plugins/google-scholar-citations.rb"
+      assert_includes files, "_plugins/hide-custom-bibtex.rb"
+      assert_includes files, "assets/js/distillpub/transforms.v2.js"
       assert_includes files, "assets/js/search/ninja-keys.min.js"
       assert_includes files, "assets/fonts/academicons.woff"
     end
