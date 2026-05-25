@@ -2,8 +2,11 @@
 
 require_relative "test_helper"
 require "fileutils"
+require "stringio"
 
 class ConfigContractTest < Minitest::Test
+  FakeSpec = Struct.new(:name, :version, :full_gem_path)
+
   def test_core_override_contract_no_longer_marks_distill_runtime_as_core_owned
     core_override_files = AlFolioUpgrade::CLI::CORE_OVERRIDE_FILES
 
@@ -191,5 +194,93 @@ class ConfigContractTest < Minitest::Test
       assert_includes files, "assets/js/search/ninja-keys.min.js"
       assert_includes files, "assets/fonts/academicons.woff"
     end
+  end
+
+  def test_local_override_results_classify_identical_override
+    Dir.mktmpdir do |dir|
+      gem_dir = File.join(dir, "gem")
+      site_dir = File.join(dir, "site")
+      FileUtils.mkdir_p(File.join(gem_dir, "_includes"))
+      FileUtils.mkdir_p(File.join(site_dir, "_includes"))
+      File.write(File.join(gem_dir, "_includes", "head.liquid"), "same\n")
+      File.write(File.join(site_dir, "_includes", "head.liquid"), "same\n")
+
+      cli = override_cli(site_dir, gem_dir)
+      results = cli.send(:local_override_results)
+
+      assert_equal 1, results.length
+      assert_equal "_includes/head.liquid", results.first.local_path
+      assert_equal :identical, results.first.status
+      assert_equal "al_folio_core", results.first.owner
+    end
+  end
+
+  def test_local_override_results_map_plugin_templates_to_local_includes
+    Dir.mktmpdir do |dir|
+      gem_dir = File.join(dir, "gem")
+      site_dir = File.join(dir, "site")
+      FileUtils.mkdir_p(File.join(gem_dir, "templates", "cv"))
+      FileUtils.mkdir_p(File.join(site_dir, "_includes", "cv"))
+      File.write(File.join(gem_dir, "templates", "cv", "render.liquid"), "upstream\n")
+      File.write(File.join(site_dir, "_includes", "cv", "render.liquid"), "local\n")
+
+      cli = override_cli(site_dir, gem_dir, owner: "al_folio_cv")
+      results = cli.send(:local_override_results)
+
+      assert_equal 1, results.length
+      assert_equal "_includes/cv/render.liquid", results.first.local_path
+      assert_equal "templates/cv/render.liquid", results.first.plugin_path
+      assert_equal :unacknowledged, results.first.status
+    end
+  end
+
+  def test_acknowledged_override_becomes_stale_when_upstream_changes
+    Dir.mktmpdir do |dir|
+      gem_dir = File.join(dir, "gem")
+      site_dir = File.join(dir, "site")
+      FileUtils.mkdir_p(File.join(gem_dir, "_layouts"))
+      FileUtils.mkdir_p(File.join(site_dir, "_layouts"))
+      File.write(File.join(gem_dir, "_layouts", "post.liquid"), "upstream v1\n")
+      File.write(File.join(site_dir, "_layouts", "post.liquid"), "local custom\n")
+
+      cli = override_cli(site_dir, gem_dir)
+      assert_equal 0, cli.send(:acknowledge_overrides, :all)
+      assert File.file?(File.join(site_dir, AlFolioUpgrade::CLI::OVERRIDE_ACK_PATH))
+
+      File.write(File.join(gem_dir, "_layouts", "post.liquid"), "upstream v2\n")
+      stale = cli.send(:local_override_results).first
+
+      assert_equal :stale, stale.status
+    end
+  end
+
+  def test_check_local_override_drift_warns_for_stale_override
+    Dir.mktmpdir do |dir|
+      gem_dir = File.join(dir, "gem")
+      site_dir = File.join(dir, "site")
+      FileUtils.mkdir_p(File.join(gem_dir, "_includes"))
+      FileUtils.mkdir_p(File.join(site_dir, "_includes"))
+      File.write(File.join(gem_dir, "_includes", "scripts.liquid"), "upstream v1\n")
+      File.write(File.join(site_dir, "_includes", "scripts.liquid"), "local custom\n")
+
+      cli = override_cli(site_dir, gem_dir)
+      cli.send(:acknowledge_overrides, :all)
+      File.write(File.join(gem_dir, "_includes", "scripts.liquid"), "upstream v2\n")
+
+      findings = []
+      cli.send(:check_local_override_drift, findings)
+
+      assert_includes findings.map(&:id), "local_override_upstream_changed"
+      assert_equal "_includes/scripts.liquid", findings.first.file
+    end
+  end
+
+  private
+
+  def override_cli(site_dir, gem_dir, owner: "al_folio_core")
+    cli = AlFolioUpgrade::CLI.new(root: site_dir, stdout: StringIO.new, stderr: StringIO.new)
+    spec = FakeSpec.new(owner, Gem::Version.new("1.0.9"), gem_dir)
+    cli.define_singleton_method(:al_folio_plugin_specs) { [spec] }
+    cli
   end
 end

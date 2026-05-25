@@ -4,6 +4,8 @@ require "optparse"
 require "pathname"
 require "yaml"
 require "date"
+require "digest"
+require "English"
 
 begin
   require "al_folio_core"
@@ -14,8 +16,19 @@ end
 module AlFolioUpgrade
   class CLI
     REPORT_PATH = "al-folio-upgrade-report.md"
+    OVERRIDE_ACK_PATH = ".al-folio-overrides.yml"
 
     Finding = Struct.new(:id, :severity, :message, :file, :line, :snippet, keyword_init: true)
+    OverrideResult = Struct.new(
+      :local_path,
+      :plugin_path,
+      :owner,
+      :version,
+      :local_sha,
+      :upstream_sha,
+      :status,
+      keyword_init: true
+    )
 
     FILE_GLOBS = [
       "_config.yml",
@@ -129,6 +142,8 @@ module AlFolioUpgrade
         write_report(findings)
         print_summary(findings)
         0
+      when "overrides"
+        run_overrides(argv)
       else
         @stderr.puts("Unsupported subcommand: #{subcommand.inspect}")
         usage(1)
@@ -138,8 +153,51 @@ module AlFolioUpgrade
     private
 
     def usage(code)
-      @stdout.puts("Usage: al-folio upgrade [audit|apply --safe|report] [--no-fail]")
+      @stdout.puts("Usage: al-folio upgrade [audit|apply --safe|report|overrides] [--no-fail]")
+      @stdout.puts("       al-folio upgrade overrides audit [--fail-on-stale]")
+      @stdout.puts("       al-folio upgrade overrides diff LOCAL_PATH")
+      @stdout.puts("       al-folio upgrade overrides accept [--all|LOCAL_PATH ...]")
       code
+    end
+
+    def run_overrides(argv)
+      command = argv.shift
+      case command
+      when "audit"
+        options = { fail_on_stale: false }
+        OptionParser.new do |opts|
+          opts.on("--fail-on-stale", "Exit non-zero when stale/unacknowledged overrides are found") do
+            options[:fail_on_stale] = true
+          end
+        end.parse!(argv)
+
+        results = local_override_results
+        print_override_audit(results)
+        return 1 if options[:fail_on_stale] && override_attention_required?(results)
+
+        0
+      when "diff"
+        local_path = argv.shift
+        if local_path.nil? || local_path.empty?
+          @stderr.puts("Usage: al-folio upgrade overrides diff LOCAL_PATH")
+          return 1
+        end
+
+        diff_override(local_path)
+      when "accept"
+        options = { all: false }
+        OptionParser.new do |opts|
+          opts.on("--all", "Acknowledge all detected local overrides") do
+            options[:all] = true
+          end
+        end.parse!(argv)
+
+        paths = options[:all] ? :all : argv
+        acknowledge_overrides(paths)
+      else
+        @stderr.puts("Unsupported overrides subcommand: #{command.inspect}")
+        usage(1)
+      end
     end
 
     def blocking?(findings)
@@ -153,7 +211,7 @@ module AlFolioUpgrade
       check_legacy_assets(findings)
       check_legacy_patterns(findings)
       check_distill_runtime(findings)
-      check_core_override_drift(findings)
+      check_local_override_drift(findings)
       check_plugin_owned_local_assets(findings)
       findings
     end
@@ -354,6 +412,239 @@ module AlFolioUpgrade
         paths << Pathname.new(File.join(spec.full_gem_path, "assets/js/distillpub/transforms.v2.js"))
       end
       paths.select(&:file?).uniq
+    end
+
+    def check_local_override_drift(findings)
+      local_override_results.each do |override|
+        case override.status
+        when :identical
+          findings << Finding.new(
+            id: "local_override_identical",
+            severity: :warning,
+            message: "Local override is identical to `#{override.owner}` #{override.version}; remove it unless it is intentional.",
+            file: override.local_path,
+            line: 1,
+            snippet: "Matches #{override.owner}:#{override.plugin_path}."
+          )
+        when :unacknowledged
+          findings << Finding.new(
+            id: "local_override_unacknowledged",
+            severity: :warning,
+            message: "Local override shadows `#{override.owner}` #{override.version}; review and acknowledge it with `al-folio upgrade overrides accept #{override.local_path}`.",
+            file: override.local_path,
+            line: 1,
+            snippet: "Diff with `al-folio upgrade overrides diff #{override.local_path}`."
+          )
+        when :stale
+          findings << Finding.new(
+            id: "local_override_upstream_changed",
+            severity: :warning,
+            message: "`#{override.owner}` changed the upstream file since this local override was acknowledged.",
+            file: override.local_path,
+            line: 1,
+            snippet: "Reconcile with `al-folio upgrade overrides diff #{override.local_path}`."
+          )
+        when :local_changed
+          findings << Finding.new(
+            id: "local_override_changed_since_ack",
+            severity: :warning,
+            message: "Local override changed since it was last acknowledged.",
+            file: override.local_path,
+            line: 1,
+            snippet: "Review and re-acknowledge with `al-folio upgrade overrides accept #{override.local_path}`."
+          )
+        end
+      end
+    end
+
+    def local_override_results
+      acknowledgements = override_acknowledgements
+      override_candidates.map do |candidate|
+        local_sha = sha256(@root.join(candidate[:local_path]))
+        upstream_sha = sha256(candidate[:plugin_absolute_path])
+        ack = acknowledgements[candidate[:local_path]]
+
+        status = if local_sha == upstream_sha
+                   :identical
+                 elsif ack.nil?
+                   :unacknowledged
+                 elsif ack["upstream_sha256"] != upstream_sha
+                   :stale
+                 elsif ack["local_sha256"] != local_sha
+                   :local_changed
+                 else
+                   :acknowledged
+                 end
+
+        OverrideResult.new(
+          local_path: candidate[:local_path],
+          plugin_path: candidate[:plugin_path],
+          owner: candidate[:owner],
+          version: candidate[:version],
+          local_sha: local_sha,
+          upstream_sha: upstream_sha,
+          status: status
+        )
+      end.sort_by(&:local_path)
+    end
+
+    def print_override_audit(results)
+      if results.empty?
+        @stdout.puts("No local overrides shadowing installed al-folio plugin files were detected.")
+        return
+      end
+
+      @stdout.puts("Detected #{results.length} local override(s):")
+      results.each do |override|
+        @stdout.puts(
+          "- #{override.local_path}: #{override.status} " \
+          "(#{override.owner} #{override.version}, upstream #{override.plugin_path})"
+        )
+      end
+      @stdout.puts("Acknowledgement file: #{OVERRIDE_ACK_PATH}")
+    end
+
+    def diff_override(local_path)
+      override = local_override_results.find { |result| result.local_path == normalize_relative_path(local_path) }
+      unless override
+        @stderr.puts("No plugin-owned override found for #{local_path}.")
+        return 1
+      end
+
+      candidate = override_candidates.find { |entry| entry[:local_path] == override.local_path }
+      system("diff", "-u", candidate[:plugin_absolute_path].to_s, @root.join(override.local_path).to_s)
+      $CHILD_STATUS&.exitstatus || 0
+    end
+
+    def acknowledge_overrides(paths)
+      results = local_override_results
+      selected = if paths == :all
+                   results
+                 else
+                   wanted = Array(paths).map { |path| normalize_relative_path(path) }
+                   results.select { |result| wanted.include?(result.local_path) }
+                 end
+
+      if selected.empty?
+        @stderr.puts("No matching local overrides to acknowledge.")
+        return 1
+      end
+
+      data = override_ack_file
+      data["version"] = 1
+      data["overrides"] ||= {}
+
+      selected.each do |override|
+        data["overrides"][override.local_path] = {
+          "owner" => override.owner,
+          "gem_version" => override.version,
+          "upstream_path" => override.plugin_path,
+          "upstream_sha256" => override.upstream_sha,
+          "local_sha256" => override.local_sha,
+          "acknowledged_at" => Date.today.iso8601,
+        }
+      end
+
+      sorted = data["overrides"].sort.to_h
+      data["overrides"] = sorted
+      File.write(@root.join(OVERRIDE_ACK_PATH), YAML.dump(data))
+      @stdout.puts("Acknowledged #{selected.length} local override(s) in #{OVERRIDE_ACK_PATH}.")
+      0
+    end
+
+    def override_attention_required?(results)
+      results.any? { |result| %i[unacknowledged stale local_changed identical].include?(result.status) }
+    end
+
+    def override_candidates
+      plugin_file_entries.each_with_object([]) do |entry, candidates|
+        local = @root.join(entry[:local_path])
+        next unless local.file?
+
+        candidates << entry
+      end
+    end
+
+    def plugin_file_entries
+      entries = []
+      al_folio_plugin_specs.each do |spec|
+        root = Pathname.new(spec.full_gem_path)
+        next unless root.directory?
+
+        plugin_globs.each do |glob|
+          Dir.glob(root.join(glob)).sort.each do |path|
+            next unless File.file?(path)
+
+            plugin_path = Pathname.new(path).relative_path_from(root).to_s
+            local_path = local_override_path(plugin_path)
+            next unless local_path
+
+            entries << {
+              local_path: local_path,
+              plugin_path: plugin_path,
+              plugin_absolute_path: Pathname.new(path),
+              owner: spec.name,
+              version: spec.version.to_s,
+            }
+          end
+        end
+      end
+
+      entries.uniq { |entry| [entry[:owner], entry[:local_path], entry[:plugin_path]] }
+    end
+
+    def plugin_globs
+      [
+        "_includes/**/*",
+        "_layouts/**/*",
+        "_sass/**/*",
+        "assets/**/*",
+        "templates/**/*",
+        "lib/assets/**/*",
+        "lib/templates/**/*",
+      ]
+    end
+
+    def local_override_path(plugin_path)
+      case plugin_path
+      when %r{\Atemplates/(.+)}
+        "_includes/#{Regexp.last_match(1)}"
+      when %r{\Alib/templates/(.+)}
+        "_includes/#{Regexp.last_match(1)}"
+      when %r{\Alib/assets/(.+)}
+        "assets/#{Regexp.last_match(1)}"
+      when %r{\A(?:_includes|_layouts|_sass|assets)/}
+        plugin_path
+      end
+    end
+
+    def al_folio_plugin_specs
+      Gem::Specification.each.select do |spec|
+        spec.name.start_with?("al_") && File.directory?(spec.full_gem_path)
+      end
+    end
+
+    def override_ack_file
+      path = @root.join(OVERRIDE_ACK_PATH)
+      return {} unless path.file?
+
+      parsed = parse_yaml(path.read) || {}
+      parsed.is_a?(Hash) ? parsed : {}
+    rescue StandardError
+      {}
+    end
+
+    def override_acknowledgements
+      overrides = override_ack_file["overrides"]
+      overrides.is_a?(Hash) ? overrides.transform_keys(&:to_s) : {}
+    end
+
+    def sha256(path)
+      Digest::SHA256.file(path).hexdigest
+    end
+
+    def normalize_relative_path(path)
+      Pathname.new(path.to_s).cleanpath.to_s.sub(%r{\A\./}, "")
     end
 
     def check_core_override_drift(findings)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3 - 2026-05-25
+
+- Added local override audit/diff/acknowledgement commands so customized sites can detect when local copies shadow changed plugin-owned files.
+
 ## 1.0.2 - 2026-05-24
 
 - Expanded upgrade audit coverage for legacy local plugins and runtime assets that are now owned by v1 feature gems.
