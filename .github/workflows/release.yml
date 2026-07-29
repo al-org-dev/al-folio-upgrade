@@ -30,15 +30,6 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
-          bundler-cache: true
-
-      - name: Run tests 🧪
-        run: |
-          if [ -d test ] && ls test/*_test.rb >/dev/null 2>&1; then
-            ruby -Ilib:test -e 'Dir["test/*_test.rb"].sort.each { |f| require File.expand_path(f) }'
-          else
-            echo "No test/*_test.rb found; skipping."
-          fi
 
       - name: Resolve gemspec and version 🔍
         id: gem
@@ -82,6 +73,22 @@ jobs:
 
       - name: Build gem 📦
         run: gem build "${{ steps.gem.outputs.spec }}"
+
+      - name: Install gem and run tests 🧪
+        # Runtime dependencies (liquid, jekyll, ...) are declared in the gemspec,
+        # not in a Gemfile — most of these repos do not have one, so there is
+        # nothing for `bundle install` to read. Installing the freshly built gem
+        # is what puts those dependencies on the load path, and it means the
+        # tests exercise the exact artifact about to be pushed rather than the
+        # working tree. Same sequence tests.yml uses.
+        run: |
+          set -euo pipefail
+          gem install --no-document "./${{ steps.gem.outputs.name }}-${{ steps.gem.outputs.version }}.gem"
+          if [ -z "$(ruby -e 'puts Dir["test/**/*_test.rb"]')" ]; then
+            echo "No test/**/*_test.rb found; skipping."
+            exit 0
+          fi
+          ruby -Ilib:test -e 'Dir["test/**/*_test.rb"].sort.each { |f| require File.expand_path(f) }'
 
       - name: Publish to RubyGems 🚀
         if: github.event_name == 'push' || inputs.dry_run == false
