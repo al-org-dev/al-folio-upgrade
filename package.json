@@ -3,7 +3,7 @@
     "lint:prettier": "prettier . --check"
   },
   "devDependencies": {
-    "@shopify/prettier-plugin-liquid": "^1.11.1",
-    "prettier": "^3.9.9"
+    "@shopify/prettier-plugin-liquid": "^1.11.2",
+    "prettier": "^3.9.10"
   }
 }
